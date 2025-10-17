@@ -24,15 +24,18 @@ export default function Schedule() {
   const fetchSchedule = async () => {
     try {
       const response = await api.get('/schedule/board');
-      setSchedule(response.data);
+      setSchedule(Array.isArray(response.data) ? response.data : []);
     } catch (error: any) {
       toast.error('Failed to load schedule');
+      setSchedule([]);
     } finally {
       setLoading(false);
     }
   };
 
-  const getStatusColor = (status: string) => {
+  const getStatusColor = (status: string | undefined) => {
+    if (!status) return 'bg-muted border-border';
+    
     switch (status.toLowerCase()) {
       case 'completed':
         return 'bg-success/20 border-success';
@@ -76,7 +79,7 @@ export default function Schedule() {
                         <p className="font-semibold">Job #{item.job_id}</p>
                         <p className="text-sm text-muted-foreground">{item.service_type}</p>
                       </div>
-                      <Badge variant="outline">{item.status}</Badge>
+                      <Badge variant="outline">{item.status || 'Pending'}</Badge>
                     </div>
                     <div className="mt-2 text-sm text-muted-foreground">
                       {new Date(item.start_time).toLocaleString()} - {new Date(item.end_time).toLocaleString()}

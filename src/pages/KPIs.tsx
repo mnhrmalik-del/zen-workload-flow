@@ -31,10 +31,12 @@ export default function KPIs() {
         api.get('/kpi/trends'),
         api.get('/kpi/technician_performance'),
       ]);
-      setTrends(trendsRes.data);
-      setPerformance(perfRes.data);
+      setTrends(Array.isArray(trendsRes.data) ? trendsRes.data : []);
+      setPerformance(Array.isArray(perfRes.data) ? perfRes.data : []);
     } catch (error: any) {
       toast.error('Failed to load KPI data');
+      setTrends([]);
+      setPerformance([]);
     } finally {
       setLoading(false);
     }
