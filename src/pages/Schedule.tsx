@@ -7,6 +7,8 @@ import api from '@/lib/api';
 import { toast } from 'sonner';
 
 interface ScheduleItem {
+  schedule_id: number;
+  technician_id: number;
   technician_name: string;
   job_id: number;
   car_model: string;
@@ -21,6 +23,8 @@ export default function Schedule() {
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState<'day' | 'week'>('day');
   const [hoveredJob, setHoveredJob] = useState<number | null>(null);
+  const [draggedItem, setDraggedItem] = useState<ScheduleItem | null>(null);
+  const [updating, setUpdating] = useState(false);
 
   useEffect(() => {
     fetchSchedule();
@@ -101,6 +105,64 @@ export default function Schedule() {
   const handleRefresh = () => {
     setLoading(true);
     fetchSchedule();
+  };
+
+  const handleDragStart = (e: React.DragEvent, item: ScheduleItem) => {
+    setDraggedItem(item);
+    e.dataTransfer.effectAllowed = 'move';
+  };
+
+  const handleDragEnd = () => {
+    setDraggedItem(null);
+  };
+
+  const handleDrop = async (e: React.DragEvent, targetTechnicianId: number, targetTechnicianName: string, dropTimeSlot: string) => {
+    e.preventDefault();
+    
+    if (!draggedItem || updating) return;
+
+    // Calculate new scheduled time based on drop position
+    const today = new Date().toISOString().split('T')[0];
+    const newScheduledTime = `${today}T${dropTimeSlot}:00`;
+    
+    // Check if dropping in the past
+    const newStartTime = new Date(newScheduledTime);
+    const now = new Date();
+    if (newStartTime < now) {
+      toast.error('Cannot schedule jobs in the past');
+      setDraggedItem(null);
+      return;
+    }
+
+    // Calculate duration and new end time
+    const originalStart = new Date(draggedItem.scheduled_time);
+    const originalEnd = new Date(draggedItem.promised_delivery);
+    const durationMs = originalEnd.getTime() - originalStart.getTime();
+    const newEndTime = new Date(newStartTime.getTime() + durationMs);
+    const newPromisedDelivery = newEndTime.toISOString();
+
+    setUpdating(true);
+
+    try {
+      await api.patch(`/schedule/${draggedItem.schedule_id}`, {
+        technician_id: targetTechnicianId,
+        scheduled_time: newScheduledTime,
+        promised_delivery: newPromisedDelivery
+      });
+
+      toast.success(`Job reassigned to ${targetTechnicianName}`);
+      fetchSchedule();
+    } catch (error: any) {
+      toast.error(error.response?.data?.detail || 'Failed to update schedule');
+    } finally {
+      setUpdating(false);
+      setDraggedItem(null);
+    }
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
   };
 
   if (loading) {
@@ -187,57 +249,81 @@ export default function Schedule() {
                 No scheduled jobs found
               </div>
             ) : (
-              Object.entries(groupedByTechnician).map(([technicianName, items]) => (
-                <div key={technicianName} className="flex border-b last:border-b-0 hover:bg-muted/30">
-                  <div className="w-40 flex-shrink-0 p-3 font-medium border-r bg-muted/20">
-                    {technicianName}
-                  </div>
-                  <div className="flex-1 relative min-h-[80px]">
-                    {items.map((item) => {
-                      const position = getJobPosition(item.scheduled_time, item.promised_delivery);
-                      return (
+              Object.entries(groupedByTechnician).map(([technicianName, items]) => {
+                const technicianId = items[0]?.technician_id;
+                return (
+                  <div key={technicianName} className="flex border-b last:border-b-0 hover:bg-muted/30">
+                    <div className="w-40 flex-shrink-0 p-3 font-medium border-r bg-muted/20">
+                      {technicianName}
+                    </div>
+                    <div className="flex-1 flex">
+                      {timeSlots.map((timeSlot) => (
                         <div
-                          key={item.job_id}
-                          className={`absolute top-2 bottom-2 ${getStatusColor(item.task_status)} rounded-lg p-2 shadow-sm border border-white/20 cursor-pointer hover:shadow-md transition-shadow overflow-hidden`}
-                          style={{
-                            left: position.left,
-                            width: position.width,
-                          }}
-                          onMouseEnter={() => setHoveredJob(item.job_id)}
-                          onMouseLeave={() => setHoveredJob(null)}
+                          key={timeSlot}
+                          className="flex-1 relative min-h-[80px] border-r last:border-r-0"
+                          onDragOver={handleDragOver}
+                          onDrop={(e) => handleDrop(e, technicianId, technicianName, timeSlot)}
                         >
-                          <div className="text-xs text-white font-medium truncate">
-                            {item.service_type}
-                          </div>
-                          <div className="text-xs text-white/90 truncate">
-                            {item.car_model}
-                          </div>
+                          {items
+                            .filter((item) => {
+                              const itemHour = new Date(item.scheduled_time).getHours();
+                              const slotHour = parseInt(timeSlot.split(':')[0]);
+                              return itemHour === slotHour;
+                            })
+                            .map((item) => {
+                              const position = getJobPosition(item.scheduled_time, item.promised_delivery);
+                              const isDragging = draggedItem?.schedule_id === item.schedule_id;
+                              return (
+                                <div
+                                  key={item.schedule_id}
+                                  draggable={!updating}
+                                  onDragStart={(e) => handleDragStart(e, item)}
+                                  onDragEnd={handleDragEnd}
+                                  className={`absolute top-2 bottom-2 ${getStatusColor(item.task_status)} rounded-lg p-2 shadow-sm border border-white/20 cursor-move hover:shadow-md transition-all overflow-hidden ${
+                                    isDragging ? 'opacity-50' : ''
+                                  } ${updating ? 'cursor-not-allowed' : ''}`}
+                                  style={{
+                                    left: position.left,
+                                    width: position.width,
+                                  }}
+                                  onMouseEnter={() => !isDragging && setHoveredJob(item.job_id)}
+                                  onMouseLeave={() => setHoveredJob(null)}
+                                >
+                                  <div className="text-xs text-white font-medium truncate">
+                                    {item.service_type}
+                                  </div>
+                                  <div className="text-xs text-white/90 truncate">
+                                    {item.car_model}
+                                  </div>
 
-                          {/* Tooltip */}
-                          {hoveredJob === item.job_id && (
-                            <div className="absolute z-50 top-full left-0 mt-1 bg-popover text-popover-foreground border rounded-lg shadow-lg p-3 min-w-[250px]">
-                              <div className="space-y-1.5">
-                                <div className="flex items-center justify-between">
-                                  <span className="font-semibold">Job #{item.job_id}</span>
-                                  <Badge className={getStatusBadgeColor(item.task_status)}>
-                                    {item.task_status}
-                                  </Badge>
+                                  {/* Tooltip */}
+                                  {hoveredJob === item.job_id && !isDragging && (
+                                    <div className="absolute z-50 top-full left-0 mt-1 bg-popover text-popover-foreground border rounded-lg shadow-lg p-3 min-w-[250px]">
+                                      <div className="space-y-1.5">
+                                        <div className="flex items-center justify-between">
+                                          <span className="font-semibold">Job #{item.job_id}</span>
+                                          <Badge className={getStatusBadgeColor(item.task_status)}>
+                                            {item.task_status}
+                                          </Badge>
+                                        </div>
+                                        <div className="text-sm space-y-0.5">
+                                          <div><span className="font-medium">Service:</span> {item.service_type}</div>
+                                          <div><span className="font-medium">Car:</span> {item.car_model}</div>
+                                          <div><span className="font-medium">Start:</span> {new Date(item.scheduled_time).toLocaleTimeString()}</div>
+                                          <div><span className="font-medium">End:</span> {new Date(item.promised_delivery).toLocaleTimeString()}</div>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  )}
                                 </div>
-                                <div className="text-sm space-y-0.5">
-                                  <div><span className="font-medium">Service:</span> {item.service_type}</div>
-                                  <div><span className="font-medium">Car:</span> {item.car_model}</div>
-                                  <div><span className="font-medium">Start:</span> {new Date(item.scheduled_time).toLocaleTimeString()}</div>
-                                  <div><span className="font-medium">End:</span> {new Date(item.promised_delivery).toLocaleTimeString()}</div>
-                                </div>
-                              </div>
-                            </div>
-                          )}
+                              );
+                            })}
                         </div>
-                      );
-                    })}
+                      ))}
+                    </div>
                   </div>
-                </div>
-              ))
+                );
+              })
             )}
           </div>
         </CardContent>
